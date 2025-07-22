@@ -1,0 +1,23 @@
+[project]
+name = "timely-mcp"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp[cli]>=1.12.0",
+    "python-dotenv>=1.1.1",
+    "requests>=2.32.4",
+]
+[project.scripts]
+timely-mcp = "main:main"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["main"]
