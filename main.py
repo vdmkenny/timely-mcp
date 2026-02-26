@@ -7,6 +7,7 @@ A Model Context Protocol server for interacting with the Timely time tracking AP
 import asyncio
 import json
 import os
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, TypedDict, Union
 
@@ -22,57 +23,40 @@ load_dotenv(override=True)
 # Initialize the MCP server
 mcp = FastMCP("Timely API")
 
-# Base URL for Timely API
-BASE_URL = "https://api.timelyapp.com/1.1"
-
-# Global variable to store access token
-ACCESS_TOKEN = ""
+# Base URL for Timely (using the web app's internal API with session cookie auth)
+BASE_URL = "https://app.timelyapp.com"
 
 
-def get_connection_credentials() -> dict[str, Any]:
-    """Get credentials from Nango"""
-    id = os.environ.get("NANGO_CONNECTION_ID")
-    integration_id = os.environ.get("NANGO_INTEGRATION_ID")
-    base_url = os.environ.get("NANGO_BASE_URL")
-    secret_key = os.environ.get("NANGO_SECRET_KEY")
-    
-    if not all([id, integration_id, base_url, secret_key]):
-        raise ApiError("Missing Nango configuration. Please set NANGO_CONNECTION_ID, NANGO_INTEGRATION_ID, NANGO_BASE_URL, and NANGO_SECRET_KEY environment variables.")
-    
-    url = f"{base_url}/connection/{id}"
-    params = {
-        "provider_config_key": integration_id,
-        "refresh_token": "true",
-    }
-    headers = {"Authorization": f"Bearer {secret_key}"}
-    
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=30)
-        response.raise_for_status()  # Raise exception for bad status codes
-        return response.json()
-    except requests.RequestException as e:
-        raise ApiError(f"Failed to get credentials from Nango: {str(e)}")
+def get_session_cookie() -> str:
+    """Get session cookie from TIMELY_SESSION_COOKIE environment variable"""
+    cookie = os.environ.get("TIMELY_SESSION_COOKIE")
+    if not cookie:
+        raise ApiError("Missing TIMELY_SESSION_COOKIE environment variable")
+    return cookie
 
 
-def get_access_token() -> str:
-    """Get access token from Nango"""
-    global ACCESS_TOKEN
-    
-    # Return cached token if available
-    if ACCESS_TOKEN:
-        return ACCESS_TOKEN
-    
-    # Get from Nango
-    try:
-        credentials = get_connection_credentials()
-        ACCESS_TOKEN = credentials.get("credentials", {}).get("access_token")
-        if not ACCESS_TOKEN:
-            raise ApiError("No access token found in Nango credentials")
-        return ACCESS_TOKEN
-    except ApiError:
-        raise
-    except Exception as e:
-        raise ApiError(f"Error retrieving access token: {str(e)}")
+_csrf_token_cache: Optional[str] = None
+
+def get_csrf_token(account_id: int) -> str:
+    """Fetch and cache the CSRF token from the Timely web app."""
+    global _csrf_token_cache
+    if _csrf_token_cache:
+        return _csrf_token_cache
+    session_cookie = get_session_cookie()
+    resp = requests.get(
+        f"{BASE_URL}/{account_id}",
+        headers={"Cookie": f"_memory_session={session_cookie}", "User-Agent": "Mozilla/5.0"},
+        allow_redirects=True,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    m = re.search(r'<meta[^>]+name="csrf-token"[^>]+content="([^"]+)"', resp.text)
+    if not m:
+        m = re.search(r'<meta[^>]+content="([^"]+)"[^>]+name="csrf-token"', resp.text)
+    if not m:
+        raise ApiError("Could not find CSRF token in Timely page")
+    _csrf_token_cache = m.group(1)
+    return _csrf_token_cache
 
 
 class ApiError(Exception):
@@ -80,18 +64,26 @@ class ApiError(Exception):
     pass
 
 
-def make_request(method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None) -> Dict[str, Any]:
+def make_request(method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None, account_id: Optional[int] = None) -> Dict[str, Any]:
     """Make HTTP request to Timely API with error handling"""
     try:
-        access_token = get_access_token()
+        session_cookie = get_session_cookie()
     except ApiError as e:
         raise ApiError(f"Authentication failed: {str(e)}")
     
     url = f"{BASE_URL}{endpoint}"
     headers = {
-        "Authorization": f"Bearer {access_token}",
-        "Content-Type": "application/json"
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Cookie": f"_memory_session={session_cookie}"
     }
+
+    # POST/PUT requests require a CSRF token
+    if method.upper() in ("POST", "PUT", "DELETE") and account_id is not None:
+        try:
+            headers["X-CSRF-Token"] = get_csrf_token(account_id)
+        except Exception:
+            pass  # best-effort; server will reject if truly required
     
     try:
         if method.upper() == "GET":
@@ -574,28 +566,65 @@ def get_event(account_id: int, event_id: int) -> Event:
 
 
 @mcp.tool()
-def create_event(account_id: int, day: str, from_time: str, to_time: str, note: Optional[str] = None, project_id: Optional[int] = None, user_id: Optional[int] = None) -> Event:
-    """Create a new event (time entry)"""
+def create_event(account_id: int, day: str, from_time: str, to_time: str, note: Optional[str] = None, project_id: Optional[int] = None, user_id: Optional[int] = None, label_ids: Optional[str] = None) -> Event:
+    """Create a new event (time entry).
+
+    Accepts duration via from_time/to_time as "HH:MM" strings, OR encode hours
+    directly by passing from_time as "hours:HH" and to_time as "minutes:MM"
+    (e.g. from_time="hours:6", to_time="minutes:30").
+    
+    label_ids: comma-separated list of label IDs (e.g. "2531527,2531529").
+    """
     try:
-        data = {
+        # Support direct hours/minutes encoding via special prefix
+        if from_time.startswith("hours:") and to_time.startswith("minutes:"):
+            hours = int(from_time.split(":")[1])
+            minutes = int(to_time.split(":")[1])
+            from_val = None
+            to_val = None
+        else:
+            hours = 0
+            minutes = 0
+            from_val = from_time
+            to_val = to_time
+
+        # Parse label_ids if provided
+        labels = []
+        if label_ids:
+            labels = [int(x.strip()) for x in label_ids.split(",") if x.strip()]
+
+        data: Dict[str, Any] = {
             "event": {
                 "day": day,
-                "from": from_time,
-                "to": to_time
+                "note": note or "",
+                "timer_state": "default",
+                "timer_started_on": 0,
+                "timer_stopped_on": 0,
+                "project_id": project_id,
+                "forecast_id": None,
+                "label_ids": labels,
+                "user_ids": [],
+                "entry_ids": [],
+                "from": from_val,
+                "to": to_val,
+                "timestamps": [],
+                "hours": hours,
+                "minutes": minutes,
+                "seconds": 0,
+                "estimated_hours": 0,
+                "estimated_minutes": 0,
+                "sequence": 1,
+                "billable": False,
+                "state_id": None,
+                "billed": False,
+                "locked": False,
+                "locked_reason": None,
+                "external_links": [],
+                "user_id": user_id,
             }
         }
-        if note:
-            data["event"]["note"] = note
-        if project_id:
-            data["event"]["project_id"] = project_id
-        if user_id:
-            data["event"]["user_id"] = user_id
-            
-        endpoint = f"/{account_id}/events"
-        if project_id:
-            endpoint = f"/{account_id}/projects/{project_id}/events"
-            
-        response = make_request("POST", endpoint, data=data)
+
+        response = make_request("POST", f"/{account_id}/hours", data=data, account_id=account_id)
         return Event(**response)
     except ApiError as e:
         raise Exception(f"Failed to create event: {str(e)}")
