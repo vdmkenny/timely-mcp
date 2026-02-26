@@ -1,14 +1,76 @@
-# Timely API MCP Server
+# Timely API MCP Server (Fork)
 
-A comprehensive Model Context Protocol (MCP) server that provides seamless integration with the [Timely](https://timelyapp.com/) time tracking API. This server enables AI assistants to manage time entries, projects, clients, users, and more through natural language interactions.
+This is a **fork** of the original [timely-mcp](https://github.com/ampcome-mcps/timely-mcp) with modifications for users who don't have admin access or OAuth credentials.
+
+## What's Different from the Original
+
+This fork uses **cookie-based authentication** instead of Nango OAuth. This is useful for:
+- Users who don't have admin privileges in Timely
+- Users who can't set up OAuth apps
+- Users who just want to use their existing web session
+
+### Changes Made
+
+1. **Authentication**: Uses `_memory_session` cookie from the Timely web app instead of Nango OAuth
+2. **API Endpoint**: Uses `app.timelyapp.com` (web app internal API) instead of `api.timelyapp.com`
+3. **`create_event` improvements**:
+   - Added `label_ids` parameter (comma-separated list of label IDs)
+   - Added duration format: use `from_time="hours:6"` and `to_time="minutes:30"` for direct duration
+4. **CSRF Protection**: Automatically fetches and caches CSRF tokens for POST/PUT/DELETE requests
 
 ## 🚀 Features
 
+- **Cookie-based Auth**: No admin/OAuth required — just your web session
 - **Complete API Coverage**: Access all major Timely API endpoints
-- **Nango Authentication**: Secure OAuth integration using Nango
 - **Structured Responses**: Type-safe, validated data models
 - **Error Handling**: Robust error management with helpful messages
 - **Real-time Operations**: Start/stop timers, create entries, manage projects
+
+## 🔧 Setup
+
+### 1. Get your Timely session cookie
+
+1. Log into Timely at https://app.timelyapp.com
+2. Open Developer Tools (F12 or Cmd+Option+I)
+3. Go to Application → Cookies → _memory_session
+4. Copy the cookie value
+
+### 2. Configure your MCP client
+
+For **OpenCode**, add to your `~/.config/opencode/opencode.json`:
+
+```json
+{
+  "mcp": {
+    "timely": {
+      "type": "local",
+      "command": [
+        "uv",
+        "run",
+        "--directory",
+        "/path/to/timely-mcp",
+        "timely-mcp"
+      ],
+      "enabled": true,
+      "environment": {
+        "TIMELY_SESSION_COOKIE": "YOUR_COOKIE_HERE"
+      }
+    }
+  }
+}
+```
+
+For **GitHub Copilot**, add to your MCP settings (similar JSON structure).
+
+### 3. Run the server
+
+```bash
+# Install dependencies
+uv sync
+
+# Run directly (for testing)
+TIMELY_SESSION_COOKIE=your_cookie uv run python main.py
+```
 
 ## 📋 Available Operations
 
