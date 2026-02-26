@@ -30,10 +30,16 @@ This fork uses **cookie-based authentication** instead of Nango OAuth. This is u
 
 ### 1. Get your Timely session cookie
 
-1. Log into Timely at https://app.timelyapp.com
-2. Open Developer Tools (F12 or Cmd+Option+I)
-3. Go to Application → Cookies → _memory_session
-4. Copy the cookie value
+1. Open your browser and go to https://app.timelyapp.com and log in
+2. Open Developer Tools:
+   - **Chrome/Edge**: Press `F12` or `Cmd+Option+I` (Mac) / `Ctrl+Shift+I` (Windows)
+   - **Firefox**: Press `F12` or `Cmd+Option+K` (Mac) / `Ctrl+Shift+K` (Windows)
+3. In Developer Tools, go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox)
+4. Expand **Cookies** in the left sidebar and click on `app.timelyapp.com`
+5. Find the cookie named `_memory_session`
+6. Copy its **Value** (not the name)
+
+**Note**: This cookie expires periodically (typically after a few weeks). You'll need to get a new one when it stops working.
 
 ### 2. Configure your MCP client
 
