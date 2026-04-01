@@ -164,14 +164,15 @@ class User(BaseModel):
 
 class Event(BaseModel):
     """Event/time entry information structure"""
+    model_config = {"extra": "allow"}
     id: int = Field(description="Event ID")
     uid: Optional[str] = Field(description="Event unique identifier", default=None)
-    project_id: int = Field(description="Associated project ID")
-    user_id: int = Field(description="User who logged the time")
+    project_id: Optional[Any] = Field(description="Associated project ID (may be int or object)", default=None)
+    user_id: Optional[Any] = Field(description="User who logged the time (may be int or object)", default=None)
     day: str = Field(description="Date of the event (YYYY-MM-DD)")
-    from_time: Optional[str] = Field(description="Start time (HH:MM)", default=None)
-    to_time: Optional[str] = Field(description="End time (HH:MM)", default=None)
-    duration: Optional[int] = Field(description="Duration in minutes", default=None)
+    from_time: Optional[str] = Field(description="Start time (HH:MM)", default=None, alias="from")
+    to_time: Optional[str] = Field(description="End time (HH:MM)", default=None, alias="to")
+    duration: Optional[Any] = Field(description="Duration (may be int or object with hours/minutes)", default=None)
     note: Optional[str] = Field(description="Event description/note", default=None)
     created_at: Optional[Union[str, int]] = Field(description="Event creation timestamp", default=None)
     updated_at: Optional[Union[str, int]] = Field(description="Event last update timestamp", default=None)
@@ -548,7 +549,7 @@ def list_events(account_id: int, since: Optional[str] = None, upto: Optional[str
         if project_id:
             params["project_id"] = project_id
             
-        response = make_request("GET", f"/{account_id}/events", params=params)
+        response = make_request("GET", f"/{account_id}/hours", params=params)
         events = [Event(**event) for event in response]
         return EventList(events=events)
     except ApiError as e:
@@ -559,7 +560,7 @@ def list_events(account_id: int, since: Optional[str] = None, upto: Optional[str
 def get_event(account_id: int, event_id: int) -> Event:
     """Retrieve a specific event by ID"""
     try:
-        response = make_request("GET", f"/{account_id}/events/{event_id}")
+        response = make_request("GET", f"/{account_id}/hours/{event_id}")
         return Event(**response)
     except ApiError as e:
         raise Exception(f"Failed to get event {event_id}: {str(e)}")
@@ -644,7 +645,7 @@ def update_event(account_id: int, event_id: int, day: Optional[str] = None, from
         if note is not None:
             data["event"]["note"] = note
             
-        response = make_request("PUT", f"/{account_id}/events/{event_id}", data=data)
+        response = make_request("PUT", f"/{account_id}/hours/{event_id}", data=data, account_id=account_id)
         return Event(**response)
     except ApiError as e:
         raise Exception(f"Failed to update event {event_id}: {str(e)}")
@@ -654,7 +655,7 @@ def update_event(account_id: int, event_id: int, day: Optional[str] = None, from
 def delete_event(account_id: int, event_id: int) -> dict[str, str]:
     """Delete an event"""
     try:
-        make_request("DELETE", f"/{account_id}/events/{event_id}")
+        make_request("DELETE", f"/{account_id}/hours/{event_id}", account_id=account_id)
         return {"result": f"Event {event_id} deleted successfully"}
     except ApiError as e:
         raise Exception(f"Failed to delete event {event_id}: {str(e)}")
@@ -664,7 +665,7 @@ def delete_event(account_id: int, event_id: int) -> dict[str, str]:
 def start_timer(account_id: int, event_id: int) -> Event:
     """Start timer on an event"""
     try:
-        response = make_request("PUT", f"/{account_id}/events/{event_id}/start")
+        response = make_request("PUT", f"/{account_id}/hours/{event_id}/start", account_id=account_id)
         return Event(**response)
     except ApiError as e:
         raise Exception(f"Failed to start timer for event {event_id}: {str(e)}")
@@ -674,7 +675,7 @@ def start_timer(account_id: int, event_id: int) -> Event:
 def stop_timer(account_id: int, event_id: int) -> Event:
     """Stop timer on an event"""
     try:
-        response = make_request("PUT", f"/{account_id}/events/{event_id}/stop")
+        response = make_request("PUT", f"/{account_id}/hours/{event_id}/stop", account_id=account_id)
         return Event(**response)
     except ApiError as e:
         raise Exception(f"Failed to stop timer for event {event_id}: {str(e)}")
