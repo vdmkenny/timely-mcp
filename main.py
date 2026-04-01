@@ -898,71 +898,10 @@ def delete_forecast(account_id: int, forecast_id: int) -> dict[str, str]:
         raise Exception(f"Failed to delete forecast {forecast_id}: {str(e)}")
 
 
-# ============================================================================
-# WEBHOOK TOOLS
-# ============================================================================
 
-@mcp.tool()
-def list_webhooks(account_id: int) -> WebhookList:
-    """List all webhooks for an account"""
-    try:
-        response = make_request("GET", f"/{account_id}/webhooks")
-        webhooks = [Webhook(**webhook) for webhook in response]
-        return WebhookList(webhooks=webhooks)
-    except ApiError as e:
-        raise Exception(f"Failed to list webhooks: {str(e)}")
-
-
-@mcp.tool()
-def get_webhook(account_id: int, webhook_id: int) -> Webhook:
-    """Retrieve a specific webhook by ID"""
-    try:
-        response = make_request("GET", f"/{account_id}/webhooks/{webhook_id}")
-        return Webhook(**response)
-    except ApiError as e:
-        raise Exception(f"Failed to get webhook {webhook_id}: {str(e)}")
-
-
-@mcp.tool()
-def create_webhook(account_id: int, target_url: str, event: str) -> Webhook:
-    """Create a new webhook"""
-    try:
-        data = {
-            "webhook": {
-                "target_url": target_url,
-                "event": event
-            }
-        }
-        response = make_request("POST", f"/{account_id}/webhooks", data=data)
-        return Webhook(**response)
-    except ApiError as e:
-        raise Exception(f"Failed to create webhook: {str(e)}")
-
-
-@mcp.tool()
-def update_webhook(account_id: int, webhook_id: int, target_url: Optional[str] = None, event: Optional[str] = None) -> Webhook:
-    """Update an existing webhook"""
-    try:
-        data = {"webhook": {}}
-        if target_url is not None:
-            data["webhook"]["target_url"] = target_url
-        if event is not None:
-            data["webhook"]["event"] = event
-            
-        response = make_request("PUT", f"/{account_id}/webhooks/{webhook_id}", data=data)
-        return Webhook(**response)
-    except ApiError as e:
-        raise Exception(f"Failed to update webhook {webhook_id}: {str(e)}")
-
-
-@mcp.tool()
-def delete_webhook(account_id: int, webhook_id: int) -> dict[str, str]:
-    """Delete a webhook"""
-    try:
-        make_request("DELETE", f"/{account_id}/webhooks/{webhook_id}")
-        return {"result": f"Webhook {webhook_id} deleted successfully"}
-    except ApiError as e:
-        raise Exception(f"Failed to delete webhook {webhook_id}: {str(e)}")
+# NOTE: Webhook endpoints (/{account_id}/webhooks) are not available via
+# cookie-based web API auth. They require OAuth API tokens. Removed to
+# avoid confusing 404 errors.
 
 
 # ============================================================================
@@ -994,14 +933,10 @@ def get_reports(account_id: int, start_date: Optional[str] = None, end_date: Opt
 # ============================================================================
 
 @mcp.tool()
-def get_permissions(account_id: int, user_id: Optional[int] = None) -> dict[str, Any]:
-    """Get user permissions for an account"""
+def get_permissions(account_id: int, user_id: int) -> dict[str, Any]:
+    """Get user permissions for an account. A user_id is required."""
     try:
-        if user_id:
-            endpoint = f"/{account_id}/users/{user_id}/permissions"
-        else:
-            endpoint = f"/{account_id}/permissions"
-            
+        endpoint = f"/{account_id}/users/{user_id}/permissions"
         response = make_request("GET", endpoint)
         return {"permissions": response}
     except ApiError as e:
@@ -1019,20 +954,16 @@ def list_roles(account_id: int) -> dict[str, Any]:
 
 
 @mcp.tool()
-def get_user_capacities(account_id: int, user_id: Optional[int] = None, since: Optional[str] = None, upto: Optional[str] = None) -> dict[str, Any]:
-    """Get user capacity information"""
+def get_user_capacities(account_id: int, user_id: int, since: Optional[str] = None, upto: Optional[str] = None) -> dict[str, Any]:
+    """Get user capacity information. A user_id is required."""
     try:
         params = {}
         if since:
             params["since"] = since
         if upto:
             params["upto"] = upto
-            
-        if user_id:
-            endpoint = f"/{account_id}/users/{user_id}/capacities"
-        else:
-            endpoint = f"/{account_id}/capacities"
-            
+
+        endpoint = f"/{account_id}/users/{user_id}/capacities"
         response = make_request("GET", endpoint, params=params)
         return {"capacities": response}
     except ApiError as e:
