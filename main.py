@@ -191,6 +191,8 @@ class Label(BaseModel):
     id: int = Field(description="Label ID")
     name: str = Field(description="Label name")
     color: Optional[str] = Field(description="Label color", default=None)
+    parent_id: Optional[int] = Field(description="Parent label ID (null for top-level)", default=None)
+    children: Optional[List["Label"]] = Field(description="Child labels", default=None)
     created_at: Optional[Union[str, int]] = Field(description="Label creation timestamp", default=None)
     updated_at: Optional[Union[str, int]] = Field(description="Label last update timestamp", default=None)
 
@@ -750,12 +752,25 @@ def delete_team(account_id: int, team_id: int) -> dict[str, str]:
 # LABEL TOOLS
 # ============================================================================
 
+def _flatten_labels(labels_data: List[Dict]) -> List[Dict]:
+    """Flatten nested label hierarchy into a flat list including all children."""
+    result = []
+    for label in labels_data:
+        children = label.pop("children", []) or []
+        result.append(label)
+        for child in children:
+            child.pop("children", None)
+            result.append(child)
+    return result
+
+
 @mcp.tool()
 def list_labels(account_id: int) -> LabelList:
-    """List all labels/tags for an account"""
+    """List all labels/tags for an account, including child labels (customers, environments, etc.)"""
     try:
         response = make_request("GET", f"/{account_id}/labels")
-        labels = [Label(**label) for label in response]
+        flat = _flatten_labels(response)
+        labels = [Label(**label) for label in flat]
         return LabelList(labels=labels)
     except ApiError as e:
         raise Exception(f"Failed to list labels: {str(e)}")
