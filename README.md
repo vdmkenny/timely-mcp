@@ -278,12 +278,12 @@ forecast = create_forecast(
 - `delete_event(account_id, event_id)` - Remove entry
 - `start_timer(account_id, event_id)` - Start timing
 - `stop_timer(account_id, event_id)` - Stop timing
+- `get_daily_hours(account_id, since, upto, user_id, target_hours, only_gaps)` - Per-day logged totals and the gap to a daily target (e.g. find days not yet filled to 8h)
 
 ### Organization Tools
 - `list_teams(account_id)`, `create_team(account_id, name)`, etc. - Team management
 - `list_labels(account_id)`, `create_label(account_id, name, color)`, etc. - Label management
 - `list_forecasts(account_id)`, `create_forecast(...)`, etc. - Task planning
-- `list_webhooks(account_id)`, `create_webhook(...)`, etc. - Webhook management
 
 ### Reporting
 - `get_reports(account_id, start_date, end_date, user_ids, project_ids)` - Generate reports

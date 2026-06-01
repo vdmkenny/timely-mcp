@@ -64,56 +64,80 @@ class ApiError(Exception):
     pass
 
 
+def _send(method: str, url: str, headers: Dict[str, str], data: Optional[Dict], params: Optional[Dict]):
+    """Dispatch a single HTTP request."""
+    m = method.upper()
+    if m == "GET":
+        return requests.get(url, headers=headers, params=params, timeout=30)
+    elif m == "POST":
+        return requests.post(url, headers=headers, json=data, timeout=30)
+    elif m == "PUT":
+        return requests.put(url, headers=headers, json=data, timeout=30)
+    elif m == "DELETE":
+        return requests.delete(url, headers=headers, timeout=30)
+    raise ApiError(f"Unsupported HTTP method: {method}")
+
+
 def make_request(method: str, endpoint: str, data: Optional[Dict] = None, params: Optional[Dict] = None, account_id: Optional[int] = None) -> Dict[str, Any]:
-    """Make HTTP request to Timely API with error handling"""
+    """Make HTTP request to Timely API with error handling.
+
+    For write methods (POST/PUT/DELETE) the CSRF token is attached. If the
+    server rejects the write with 403/422 (commonly a stale CSRF token), the
+    token cache is invalidated and the request is retried once.
+    """
+    global _csrf_token_cache
     try:
         session_cookie = get_session_cookie()
     except ApiError as e:
         raise ApiError(f"Authentication failed: {str(e)}")
-    
-    url = f"{BASE_URL}{endpoint}"
-    headers = {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Cookie": f"_memory_session={session_cookie}"
-    }
 
-    # POST/PUT requests require a CSRF token
-    if method.upper() in ("POST", "PUT", "DELETE") and account_id is not None:
-        try:
-            headers["X-CSRF-Token"] = get_csrf_token(account_id)
-        except Exception:
-            pass  # best-effort; server will reject if truly required
-    
+    url = f"{BASE_URL}{endpoint}"
+    is_write = method.upper() in ("POST", "PUT", "DELETE")
+
+    def build_headers() -> Dict[str, str]:
+        h = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Cookie": f"_memory_session={session_cookie}",
+        }
+        if is_write and account_id is not None:
+            try:
+                h["X-CSRF-Token"] = get_csrf_token(account_id)
+            except Exception:
+                pass  # best-effort; server will reject if truly required
+        return h
+
+    attempts = 2 if (is_write and account_id is not None) else 1
     try:
-        if method.upper() == "GET":
-            response = requests.get(url, headers=headers, params=params, timeout=30)
-        elif method.upper() == "POST":
-            response = requests.post(url, headers=headers, json=data, timeout=30)
-        elif method.upper() == "PUT":
-            response = requests.put(url, headers=headers, json=data, timeout=30)
-        elif method.upper() == "DELETE":
-            response = requests.delete(url, headers=headers, timeout=30)
-        else:
-            raise ApiError(f"Unsupported HTTP method: {method}")
-        
-        # Handle HTTP errors
-        if response.status_code == 401:
-            raise ApiError("Unauthorized: Invalid access token")
-        elif response.status_code == 403:
-            raise ApiError("Forbidden: Insufficient permissions")
-        elif response.status_code == 404:
-            raise ApiError("Not Found: Resource does not exist")
-        elif response.status_code == 422:
-            error_data = response.json() if response.content else {}
-            errors = error_data.get("errors", {})
-            raise ApiError(f"Validation Error: {errors}")
-        elif response.status_code >= 400:
-            raise ApiError(f"HTTP {response.status_code}: {response.reason}")
-        
-        # Return JSON response or empty dict for successful requests with no content
-        return response.json() if response.content else {}
-        
+        for attempt in range(attempts):
+            response = _send(method, url, build_headers(), data, params)
+
+            # On a write rejection that may be a stale CSRF token, refresh once.
+            if is_write and account_id is not None and attempt == 0 \
+                    and response.status_code in (403, 422):
+                _csrf_token_cache = None
+                continue
+
+            # Handle HTTP errors
+            if response.status_code == 401:
+                raise ApiError(
+                    "Unauthorized: session cookie is invalid or expired. "
+                    "Refresh TIMELY_SESSION_COOKIE."
+                )
+            elif response.status_code == 403:
+                raise ApiError("Forbidden: insufficient permissions (or CSRF token rejected)")
+            elif response.status_code == 404:
+                raise ApiError("Not Found: Resource does not exist")
+            elif response.status_code == 422:
+                error_data = response.json() if response.content else {}
+                errors = error_data.get("errors", error_data)
+                raise ApiError(f"Validation Error: {errors}")
+            elif response.status_code >= 400:
+                raise ApiError(f"HTTP {response.status_code}: {response.reason}")
+
+            # Return JSON response or empty dict for successful requests with no content
+            return response.json() if response.content else {}
+
     except requests.RequestException as e:
         raise ApiError(f"Request failed: {str(e)}")
     except json.JSONDecodeError:
@@ -706,6 +730,88 @@ def stop_timer(account_id: int, event_id: int) -> Event:
         return Event(**response)
     except ApiError as e:
         raise Exception(f"Failed to stop timer for event {event_id}: {str(e)}")
+
+
+def _event_minutes(event: Dict[str, Any]) -> int:
+    """Extract an event's logged duration in whole minutes.
+
+    Handles Timely's two shapes: a nested ``duration`` object
+    ({hours, minutes, seconds}) or flat ``hours``/``minutes`` fields.
+    """
+    dur = event.get("duration")
+    if isinstance(dur, dict):
+        return int(dur.get("hours", 0)) * 60 + int(dur.get("minutes", 0))
+    if isinstance(dur, (int, float)):
+        # Timely reports bare durations in minutes
+        return int(dur)
+    return int(event.get("hours", 0) or 0) * 60 + int(event.get("minutes", 0) or 0)
+
+
+class DailyHours(BaseModel):
+    """Logged time for a single day with the gap to a target."""
+    day: str = Field(description="Date (YYYY-MM-DD)")
+    logged_minutes: int = Field(description="Total minutes logged that day")
+    logged_hm: str = Field(description="Logged time formatted as Hh Mm")
+    target_minutes: int = Field(description="Target minutes for the day")
+    gap_minutes: int = Field(description="target_minutes - logged_minutes (positive = unfilled)")
+    event_count: int = Field(description="Number of entries on the day")
+
+
+class DailyHoursReport(BaseModel):
+    """Per-day logged hours across a date range."""
+    days: List[DailyHours] = Field(description="One entry per day with logged time")
+    total_logged_minutes: int = Field(description="Sum of logged minutes across the range")
+
+
+@mcp.tool()
+def get_daily_hours(account_id: int, since: str, upto: str, user_id: Optional[int] = None, target_hours: float = 8.0, only_gaps: bool = False) -> DailyHoursReport:
+    """Summarize logged time per day over a date range and the gap to a daily target.
+
+    This aggregates the /hours entries by day so you can see, at a glance, which
+    days are under the target (e.g. days that still need filling to 8h).
+
+    Args:
+        since/upto: inclusive date range (YYYY-MM-DD).
+        user_id: restrict to one user (recommended).
+        target_hours: per-day target used to compute the gap (default 8.0).
+        only_gaps: when True, only return days whose logged time is below target.
+    """
+    try:
+        params: Dict[str, Any] = {"since": since, "upto": upto}
+        if user_id:
+            params["user_id"] = user_id
+        response = make_request("GET", f"/{account_id}/hours", params=params)
+
+        target_minutes = int(round(target_hours * 60))
+        totals: Dict[str, Dict[str, int]] = {}
+        for event in response:
+            day = event.get("day")
+            if not day:
+                continue
+            bucket = totals.setdefault(day, {"minutes": 0, "count": 0})
+            bucket["minutes"] += _event_minutes(event)
+            bucket["count"] += 1
+
+        days: List[DailyHours] = []
+        total_logged = 0
+        for day in sorted(totals):
+            mins = totals[day]["minutes"]
+            total_logged += mins
+            gap = target_minutes - mins
+            if only_gaps and gap <= 0:
+                continue
+            days.append(DailyHours(
+                day=day,
+                logged_minutes=mins,
+                logged_hm=f"{mins // 60}h {mins % 60:02d}m",
+                target_minutes=target_minutes,
+                gap_minutes=gap,
+                event_count=totals[day]["count"],
+            ))
+
+        return DailyHoursReport(days=days, total_logged_minutes=total_logged)
+    except ApiError as e:
+        raise Exception(f"Failed to get daily hours: {str(e)}")
 
 
 # ============================================================================
