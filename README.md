@@ -283,6 +283,7 @@ forecast = create_forecast(
 ### Organization Tools
 - `list_teams(account_id)`, `create_team(account_id, name)`, etc. - Team management
 - `list_labels(account_id)`, `create_label(account_id, name, color)`, etc. - Label management
+- `find_labels(account_id, query, parent_id)` - Search labels by name; returns IDs with parent context (e.g. resolve a customer/environment label ID without dumping the whole tree)
 - `list_forecasts(account_id)`, `create_forecast(...)`, etc. - Task planning
 
 ### Reporting

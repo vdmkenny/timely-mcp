@@ -917,6 +917,60 @@ def get_label(account_id: int, label_id: int) -> Label:
         raise Exception(f"Failed to get label {label_id}: {str(e)}")
 
 
+class LabelMatch(BaseModel):
+    """A label matched by name search, with its parent context."""
+    id: int = Field(description="Label ID")
+    name: str = Field(description="Label name")
+    parent_id: Optional[int] = Field(description="Parent label ID (null for top-level)", default=None)
+    parent_name: Optional[str] = Field(description="Parent label name, if any", default=None)
+
+
+class LabelMatchList(BaseModel):
+    """Result of a label name search."""
+    matches: List[LabelMatch] = Field(description="Labels whose name matched the query")
+
+
+@mcp.tool()
+def find_labels(account_id: int, query: str, parent_id: Optional[int] = None) -> LabelMatchList:
+    """Search labels by name and return their IDs with parent context.
+
+    Solves the common "what's the label ID for customer/environment X?" lookup
+    without dumping the whole label tree. Matching is case-insensitive substring.
+
+    Args:
+        query: substring to match against label names (case-insensitive).
+        parent_id: optionally restrict results to children of this parent group
+                   (e.g. the customer group id). Use this to disambiguate names
+                   that exist under multiple groups.
+    """
+    try:
+        response = make_request("GET", f"/{account_id}/labels")
+        q = query.strip().lower()
+        names_by_id = {lbl.get("id"): lbl.get("name") for lbl in response}
+
+        matches: List[LabelMatch] = []
+
+        def consider(lbl: Dict, parent: Optional[Dict]):
+            name = lbl.get("name") or ""
+            pid = lbl.get("parent_id") or (parent.get("id") if parent else None)
+            if parent_id is not None and pid != parent_id:
+                return
+            if q in name.lower():
+                pname = names_by_id.get(pid) if pid is not None else None
+                if pname is None and parent is not None:
+                    pname = parent.get("name")
+                matches.append(LabelMatch(id=lbl.get("id"), name=name, parent_id=pid, parent_name=pname))
+
+        for top in response:
+            consider(top, None)
+            for child in (top.get("children") or []):
+                consider(child, top)
+
+        return LabelMatchList(matches=matches)
+    except ApiError as e:
+        raise Exception(f"Failed to find labels: {str(e)}")
+
+
 @mcp.tool()
 def create_label(account_id: int, name: str, color: Optional[str] = None) -> Label:
     """Create a new label/tag"""
