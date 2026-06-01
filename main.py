@@ -634,19 +634,44 @@ def create_event(account_id: int, day: str, from_time: str, to_time: str, note: 
 
 
 @mcp.tool()
-def update_event(account_id: int, event_id: int, day: Optional[str] = None, from_time: Optional[str] = None, to_time: Optional[str] = None, note: Optional[str] = None) -> Event:
-    """Update an existing event"""
+def update_event(account_id: int, event_id: int, day: Optional[str] = None, from_time: Optional[str] = None, to_time: Optional[str] = None, note: Optional[str] = None, project_id: Optional[int] = None, label_ids: Optional[str] = None) -> Event:
+    """Update an existing event.
+
+    Duration can be set two ways:
+      * clock times: from_time/to_time as "HH:MM" strings, OR
+      * direct encoding: from_time="hours:HH" and to_time="minutes:MM"
+        (e.g. from_time="hours:3", to_time="minutes:30" for 3h30m).
+
+    project_id: optionally move the entry to a different project.
+    label_ids: comma-separated list of label IDs (e.g. "2531438,4226873").
+               Replaces the entry's labels when provided.
+    """
     try:
-        data = {"event": {}}
+        data: Dict[str, Any] = {"event": {}}
         if day is not None:
             data["event"]["day"] = day
-        if from_time is not None:
-            data["event"]["from"] = from_time
-        if to_time is not None:
-            data["event"]["to"] = to_time
+
+        # Duration: support direct hours/minutes encoding via special prefix
+        if from_time is not None and to_time is not None \
+                and from_time.startswith("hours:") and to_time.startswith("minutes:"):
+            data["event"]["hours"] = int(from_time.split(":")[1])
+            data["event"]["minutes"] = int(to_time.split(":")[1])
+            data["event"]["seconds"] = 0
+            data["event"]["from"] = None
+            data["event"]["to"] = None
+        else:
+            if from_time is not None:
+                data["event"]["from"] = from_time
+            if to_time is not None:
+                data["event"]["to"] = to_time
+
         if note is not None:
             data["event"]["note"] = note
-            
+        if project_id is not None:
+            data["event"]["project_id"] = project_id
+        if label_ids is not None:
+            data["event"]["label_ids"] = [int(x.strip()) for x in label_ids.split(",") if x.strip()]
+
         response = make_request("PUT", f"/{account_id}/hours/{event_id}", data=data, account_id=account_id)
         return Event(**response)
     except ApiError as e:
