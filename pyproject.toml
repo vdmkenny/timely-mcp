@@ -1,13 +1,15 @@
 [project]
 name = "timely-mcp"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "MCP server for safe Timely time tracking and timesheet backfills"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "mcp[cli]>=1.12.0",
-    "python-dotenv>=1.1.1",
-    "requests>=2.32.4",
+    "mcp[cli]==2.0.0",
+    "pydantic==2.13.4",
+    "python-dotenv==1.2.2",
+    "requests==2.34.2",
+    "urllib3==2.7.0",
 ]
 [project.scripts]
 timely-mcp = "main:main"
@@ -16,8 +18,13 @@ timely-mcp = "main:main"
 package = true
 
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools==83.0.0", "wheel==0.47.0"]
 build-backend = "setuptools.build_meta"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
 
 [tool.setuptools]
 py-modules = ["main"]

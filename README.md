@@ -1,49 +1,41 @@
-# Timely API MCP Server (Fork)
+# Timely MCP Server
 
-This is a **fork** of the original [timely-mcp](https://github.com/ampcome-mcps/timely-mcp) with modifications for users who don't have admin access or OAuth credentials.
+An [MCP](https://modelcontextprotocol.io) server for [Timely](https://www.timelyapp.com)
+time tracking via the web app's internal cookie-authenticated API. Tailored
+for safe, repeatable timesheet backfills.
 
-## What's Different from the Original
+This fork uses **cookie-based authentication** instead of Nango OAuth.
 
-This fork uses **cookie-based authentication** instead of Nango OAuth. This is useful for:
-- Users who don't have admin privileges in Timely
-- Users who can't set up OAuth apps
-- Users who just want to use their existing web session
+## Features
 
-### Changes Made
+- Full CRUD for accounts, clients, projects, users, teams, labels, forecasts.
+- Compact event listing with bounded, calendar-aware daily/hour reporting.
+- Dry-run backfill planning and idempotent bulk creation with rollback.
+- Name-based lookups for projects and labels.
+- Read-only and allowed-account safety switches.
 
-1. **Authentication**: Uses `_memory_session` cookie from the Timely web app instead of Nango OAuth
-2. **API Endpoint**: Uses `app.timelyapp.com` (web app internal API) instead of `api.timelyapp.com`
-3. **`create_event` improvements**:
-   - Added `label_ids` parameter (comma-separated list of label IDs)
-   - Added duration format: use `from_time="hours:6"` and `to_time="minutes:30"` for direct duration
-4. **CSRF Protection**: Automatically fetches and caches CSRF tokens for POST/PUT/DELETE requests
+## Requirements
 
-## 🚀 Features
+- Python 3.13+
+- A Timely login and a browser to copy the `_memory_session` cookie.
+- Managed by [uv](https://docs.astral.sh/uv/).
 
-- **Cookie-based Auth**: No admin/OAuth required — just your web session
-- **Complete API Coverage**: Access all major Timely API endpoints
-- **Structured Responses**: Type-safe, validated data models
-- **Error Handling**: Robust error management with helpful messages
-- **Real-time Operations**: Start/stop timers, create entries, manage projects
-
-## 🔧 Setup
+## Setup
 
 ### 1. Get your Timely session cookie
 
-1. Open your browser and go to https://app.timelyapp.com and log in
-2. Open Developer Tools:
-   - **Chrome/Edge**: Press `F12` or `Cmd+Option+I` (Mac) / `Ctrl+Shift+I` (Windows)
-   - **Firefox**: Press `F12` or `Cmd+Option+K` (Mac) / `Ctrl+Shift+K` (Windows)
-3. In Developer Tools, go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox)
-4. Expand **Cookies** in the left sidebar and click on `app.timelyapp.com`
-5. Find the cookie named `_memory_session`
-6. Copy its **Value** (not the name)
+1. Open your browser and log in to https://app.timelyapp.com
+2. Open Developer Tools (`F12` / `Cmd+Option+I`).
+3. Go to the **Application** tab (Chrome/Edge) or **Storage** tab (Firefox).
+4. Expand **Cookies** → `app.timelyapp.com`.
+5. Copy the value of the `_memory_session` cookie (not its name).
 
-**Note**: This cookie expires periodically (typically after a few weeks). You'll need to get a new one when it stops working.
+> The cookie expires periodically (typically after a few weeks), after which the
+> server returns a clear `Unauthorized` error and you must refresh it.
 
 ### 2. Configure your MCP client
 
-For **OpenCode**, add to your `~/.config/opencode/opencode.json`:
+For **OpenCode**, add to `~/.config/opencode/opencode.json`:
 
 ```json
 {
@@ -66,301 +58,71 @@ For **OpenCode**, add to your `~/.config/opencode/opencode.json`:
 }
 ```
 
-For **GitHub Copilot**, add to your MCP settings (similar JSON structure).
+For **GitHub Copilot**, add a similar entry to its MCP settings.
 
 ### 3. Run the server
 
 ```bash
-# Install dependencies
-uv sync
-
-# Run directly (for testing)
-TIMELY_SESSION_COOKIE=your_cookie uv run python main.py
+uv run timely-mcp
 ```
 
-## 📋 Available Operations
+## Environment variables
 
-### 🏢 Account & User Management
-- List and retrieve accounts
-- Manage users (create, update, delete, invite)
-- Get current user information
-- View user permissions and roles
-- Check user capacities and availability
+| Variable | Purpose |
+| --- | --- |
+| `TIMELY_SESSION_COOKIE` | Required. `_memory_session` cookie value. |
+| `TIMELY_READ_ONLY` | Set to `1`/`true` to reject every write operation. |
+| `TIMELY_ALLOWED_ACCOUNT_IDS` | Optional comma-separated whitelist of accounts allowed for writes. |
 
-### 👥 Client & Project Management
-- Create, update, and delete clients
-- Manage projects with full CRUD operations
-- Organize work by client relationships
-- Set project descriptions and status
+A local `.env` file is supported but never overrides environment variables
+provided by the MCP client.
 
-### ⏰ Time Tracking
-- List, create, update, and delete time entries
-- Start and stop timers on events
-- Filter entries by date, user, or project
-- Bulk operations for multiple entries
+## Safety switches
 
-### 🏷️ Organization Tools
-- Create and manage labels/tags
-- Organize teams and team assignments
-- Set up forecasts and task planning
-- Generate detailed reports
+The server supports dry-run by default for bulk operations, optional read-only
+mode (`TIMELY_READ_ONLY`), and an allowed-account allowlist. Bulk creation:
 
-### 🔗 Integration Features
-- Webhook management for real-time notifications
-- Report generation with custom filters
-- Bulk operations for efficiency
-- Connection testing and token refresh
+- Prefetches and fingerprints existing entries.
+- Rejects or skips exact duplicates depending on policy.
+- Enforces a per-day minute cap across all users in the batch.
+- Marks ambiguous write timeouts for reconciliation instead of blind retries.
+- Rolls back entries created by a failed batch when `rollback_on_failure`.
 
-## 🛠️ Installation
+Plans returned by `plan_timesheet_backfill` carry a hash; `apply_timesheet_plan`
+recomputes it against live data and refuses to apply if entries changed.
 
-### Prerequisites
-- Python 3.8 or higher
-- A Timely account with API access
-- Nango setup for OAuth authentication
+## Tool inventory
 
-### Setup Steps
+Backfill & analysis
 
-1. **Clone or download the MCP server file**
-   ```bash
-   # Save the main.py file to your desired directory
-   cd your-mcp-directory
-   ```
+- `get_daily_hours` – calendar-complete per-day totals with configurable
+  workdays and excluded dates; zero-entry workdays remain visible.
+- `list_events` – compact entries with bounded ranges and result limits.
+- `plan_timesheet_backfill` – dry-run plan with per-day gaps and a plan hash.
+- `apply_timesheet_plan` – apply a stored plan after revalidating live data.
+- `bulk_create_events` – validated bulk creation (dry-run by default).
+- `find_projects`, `find_labels` – bounded name-based lookups.
 
-2. **Install required dependencies**
-   ```bash
-   pip install requests pydantic mcp
-   ```
+Standard CRUD
 
-3. **Configure Nango Authentication**
-   
-   Set up these environment variables with your Nango configuration:
-   ```bash
-   export NANGO_CONNECTION_ID="your_connection_id"
-   export NANGO_INTEGRATION_ID="your_integration_id"
-   export NANGO_BASE_URL="https://api.nango.dev"
-   export NANGO_SECRET_KEY="your_nango_secret_key"
-   ```
+- Accounts, clients, projects, users, teams, labels, forecasts.
+- Events: `create_event`, `get_event`, `update_event`, `delete_event`,
+  `start_timer`, `stop_timer`.
 
-4. **Run the MCP server**
-   ```bash
-   python main.py
-   ```
+Reports & access
 
-## 🔧 Nango Setup Guide
+- `get_reports`, `get_permissions`, `list_roles`, `get_user_capacities`.
 
-### 1. Create a Nango Account
-- Sign up at [nango.dev](https://nango.dev)
-- Create a new project
+## Notes
 
-### 2. Configure Timely Integration
-- Add Timely as a provider in your Nango dashboard
-- Configure OAuth settings with Timely's endpoints:
-  - Authorization URL: `https://api.timelyapp.com/1.1/oauth/authorize`
-  - Token URL: `https://api.timelyapp.com/1.1/oauth/token`
+- Webhook endpoints and Nango OAuth were removed: the cookie-based API does not
+  support them.
+- `delete_client` is intentionally absent; removing clients is destructive and
+  not exposed by the internal web API used here.
 
-### 3. Create a Connection
-- Create a connection for your Timely account
-- Note down the Connection ID for environment variables
+## Development
 
-### 4. Get Your Credentials
-- Find your Integration ID in the Nango dashboard
-- Generate a Secret Key for API access
-- Set the base URL (typically `https://api.nango.dev`)
-
-## 💡 Usage Examples
-
-### Basic Time Tracking
-```python
-# List all accounts
-accounts = list_accounts()
-
-# Get current user
-user = get_current_user(account_id=123456)
-
-# Create a time entry
-event = create_event(
-    account_id=123456,
-    day="2024-01-15",
-    from_time="09:00",
-    to_time="17:00",
-    note="Working on project documentation"
-)
-
-# Start a timer
-start_timer(account_id=123456, event_id=789)
+```bash
+uv sync --group dev
+uv run pytest
 ```
-
-### Project Management
-```python
-# Create a new client
-client = create_client(
-    account_id=123456,
-    name="Acme Corporation",
-    active=True
-)
-
-# Create a project for the client
-project = create_project(
-    account_id=123456,
-    name="Website Redesign",
-    description="Complete redesign of corporate website",
-    client_id=client.id
-)
-
-# List all projects
-projects = list_projects(account_id=123456)
-```
-
-### Team Collaboration
-```python
-# Create a team
-team = create_team(
-    account_id=123456,
-    name="Development Team"
-)
-
-# Invite a user
-user = create_user(
-    account_id=123456,
-    name="Jane Smith",
-    email="jane@company.com",
-    user_level="normal"
-)
-
-# Create a forecast/task
-forecast = create_forecast(
-    account_id=123456,
-    project_id=project.id,
-    user_id=user.id,
-    day="2024-01-20",
-    duration=480,  # 8 hours in minutes
-    note="Frontend development work"
-)
-```
-
-## 🔍 Available Tools
-
-### Authentication & Testing
-- `test_connection()` - Test API connectivity
-- `refresh_nango_token()` - Manually refresh authentication token
-
-### Account Management
-- `list_accounts()` - Get all accessible accounts
-- `get_account(account_id)` - Get specific account details
-
-### User Operations
-- `list_users(account_id)` - List all users
-- `get_user(account_id, user_id)` - Get user details
-- `get_current_user(account_id)` - Get authenticated user info
-- `create_user(account_id, name, email, user_level)` - Invite new user
-- `update_user(account_id, user_id, ...)` - Update user information
-- `delete_user(account_id, user_id)` - Remove user
-
-### Client Management
-- `list_clients(account_id)` - List all clients
-- `get_client(account_id, client_id)` - Get client details
-- `create_client(account_id, name, active)` - Create new client
-- `update_client(account_id, client_id, ...)` - Update client
-- `delete_client(account_id, client_id)` - Remove client
-
-### Project Management
-- `list_projects(account_id)` - List all projects
-- `get_project(account_id, project_id)` - Get project details
-- `create_project(account_id, name, description, client_id)` - Create project
-- `update_project(account_id, project_id, ...)` - Update project
-- `delete_project(account_id, project_id)` - Remove project
-
-### Time Tracking
-- `list_events(account_id, since, upto, user_id, project_id)` - List time entries
-- `get_event(account_id, event_id)` - Get specific entry
-- `create_event(account_id, day, from_time, to_time, note, project_id)` - Log time
-- `update_event(account_id, event_id, ...)` - Modify entry
-- `delete_event(account_id, event_id)` - Remove entry
-- `start_timer(account_id, event_id)` - Start timing
-- `stop_timer(account_id, event_id)` - Stop timing
-- `get_daily_hours(account_id, since, upto, user_id, target_hours, only_gaps)` - Per-day logged totals and the gap to a daily target (e.g. find days not yet filled to 8h)
-
-### Organization Tools
-- `list_teams(account_id)`, `create_team(account_id, name)`, etc. - Team management
-- `list_labels(account_id)`, `create_label(account_id, name, color)`, etc. - Label management
-- `find_labels(account_id, query, parent_id)` - Search labels by name; returns IDs with parent context (e.g. resolve a customer/environment label ID without dumping the whole tree)
-- `list_forecasts(account_id)`, `create_forecast(...)`, etc. - Task planning
-
-### Reporting
-- `get_reports(account_id, start_date, end_date, user_ids, project_ids)` - Generate reports
-- `get_permissions(account_id, user_id)` - View permissions
-- `get_user_capacities(account_id, user_id, since, upto)` - Check availability
-
-## 🛡️ Error Handling
-
-The server includes comprehensive error handling for:
-
-- **Authentication Errors**: Invalid tokens, missing Nango configuration
-- **API Errors**: HTTP status codes (401, 403, 404, 422, 500)
-- **Network Issues**: Timeout, connection failures
-- **Validation Errors**: Invalid data formats, missing required fields
-
-Error messages are clear and actionable, helping you quickly identify and resolve issues.
-
-## 📊 Response Format
-
-All tools return structured, typed data using Pydantic models:
-
-```python
-# Example Account response
-{
-    "accounts": [
-        {
-            "id": 123456,
-            "name": "My Company",
-            "created_at": "2024-01-01T00:00:00Z",
-            "updated_at": "2024-01-15T12:30:00Z"
-        }
-    ]
-}
-
-# Example Event response
-{
-    "id": 789,
-    "project_id": 456,
-    "user_id": 123,
-    "day": "2024-01-15",
-    "from_time": "09:00",
-    "to_time": "17:00",
-    "duration": 480,
-    "note": "Development work",
-    "created_at": "2024-01-15T09:00:00Z"
-}
-```
-
-## 🤝 Contributing
-
-Found a bug or want to add a feature? Contributions are welcome! Please:
-
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a pull request
-
-## 📞 Support
-
-- **Timely API Documentation**: [dev.timelyapp.com](https://dev.timelyapp.com)
-- **Nango Documentation**: [docs.nango.dev](https://docs.nango.dev)
-- **MCP Protocol**: [modelcontextprotocol.io](https://modelcontextprotocol.io)
-
-For issues with this MCP server, please check that:
-1. Your Nango configuration is correct
-2. Your Timely account has API access
-3. All environment variables are properly set
-4. You have the required permissions for the operations you're trying to perform
-
-## 📝 License
-
-This project is provided as-is for educational and development purposes. Please ensure compliance with Timely's API terms of service when using this server.
-
----
-
-**Made with ❤️ for the MCP community**
-
-*Streamline your time tracking workflows with natural language AI interactions!*
