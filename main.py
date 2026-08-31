@@ -31,6 +31,19 @@ mcp = MCPServer("Timely API")
 BASE_URL = "https://app.timelyapp.com"
 
 
+def _apply_session_cookie(session_cookie: str) -> None:
+    """Put the session cookie in the shared jar.
+
+    Timely validates writes against BOTH the X-CSRF-Token header and the
+    server-set ``csrf_token`` cookie. Sending a hand-built ``Cookie`` header
+    suppresses the jar, so that cookie never reaches the server and every write
+    is rejected. Setting the cookie on the jar lets requests merge the two.
+    """
+    _http.cookies.set(
+        "_memory_session", session_cookie, domain="app.timelyapp.com", path="/"
+    )
+
+
 def get_session_cookie() -> str:
     """Get session cookie from TIMELY_SESSION_COOKIE environment variable"""
     cookie = os.environ.get("TIMELY_SESSION_COOKIE")
@@ -97,9 +110,9 @@ def get_csrf_token(account_id: int) -> str:
     cache_key = _cookie_cache_key(account_id, session_cookie)
     if cache_key in _csrf_token_cache:
         return _csrf_token_cache[cache_key]
+    _apply_session_cookie(session_cookie)
     resp = _http.get(
         f"{BASE_URL}/{account_id}",
-        headers={"Cookie": f"_memory_session={session_cookie}"},
         allow_redirects=True,
         timeout=HTTP_TIMEOUT,
     )
@@ -265,9 +278,31 @@ def _endpoint_account_id(endpoint: str) -> Optional[int]:
     return int(match.group(1)) if match else None
 
 
+def _body_says_unauthorized(response: requests.Response) -> bool:
+    """Detect Timely's auth failures, which arrive as 404 with an error body.
+
+    Writes rejected for a stale CSRF token or an expired session come back as
+    ``404 {"errors": {"message": "Unauthorized"}}`` rather than a 401, so the
+    status code alone would report them as a missing resource.
+    """
+    if not response.content:
+        return False
+    try:
+        data = response.json()
+    except (ValueError, requests.exceptions.JSONDecodeError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    errors = data.get("errors")
+    message = errors.get("message") if isinstance(errors, dict) else errors
+    return isinstance(message, str) and message.strip().lower() == "unauthorized"
+
+
 def _csrf_rejected(response: requests.Response) -> bool:
     if response.status_code == HTTPStatus.FORBIDDEN:
         return True
+    if response.status_code == HTTPStatus.NOT_FOUND:
+        return _body_says_unauthorized(response)
     if response.status_code != HTTPStatus.UNPROCESSABLE_ENTITY:
         return False
     text = response.text.lower()
@@ -286,6 +321,7 @@ def make_request(method: str, endpoint: str, data: Optional[Dict] = None, params
     except ApiError as e:
         raise ApiError(f"Authentication failed: {str(e)}")
 
+    _apply_session_cookie(session_cookie)
     url = f"{BASE_URL}{endpoint}"
     is_write = method.upper() in ("POST", "PUT", "DELETE")
     resolved_account_id = account_id or _endpoint_account_id(endpoint)
@@ -298,7 +334,6 @@ def make_request(method: str, endpoint: str, data: Optional[Dict] = None, params
         h = {
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "Cookie": f"_memory_session={session_cookie}",
         }
         if is_write and resolved_account_id is not None:
             h["X-CSRF-Token"] = get_csrf_token(resolved_account_id)
@@ -315,7 +350,7 @@ def make_request(method: str, endpoint: str, data: Optional[Dict] = None, params
                 continue
 
             # Handle HTTP errors
-            if response.status_code == HTTPStatus.UNAUTHORIZED:
+            if response.status_code == HTTPStatus.UNAUTHORIZED or _body_says_unauthorized(response):
                 raise ApiError(
                     "Unauthorized: session cookie is invalid or expired. "
                     "Refresh TIMELY_SESSION_COOKIE.",
